@@ -15,7 +15,7 @@ pipeline {
     }
     
     environment {
-        IMAGE_NAME = "solosahej/BlueGreenJava"
+        IMAGE_NAME = "solosahej/bluegreenjava"
         TAG = "${params.DOCKER_TAG}"  // The image tag now comes from the parameter
         KUBE_NAMESPACE = 'webapps'
         SCANNER_HOME= tool 'sonar-scanner'
@@ -52,8 +52,8 @@ pipeline {
             steps {
                 withSonarQubeEnv('sonar') {
                     sh ''' 
-                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=BlueGreenJava \
-                        -Dsonar.projectKey=BlueGreenJava \
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=bluegreenjava \
+                        -Dsonar.projectKey=bluegreenjava \
                         -Dsonar.java.binaries=target 
                     '''
                 }
