@@ -28,15 +28,19 @@ on:
 
 
 env:
-  IMAGE_NAME: solosahej/BlueGreenJava
+  # Docker Hub repository - LOWERCASE
+  IMAGE_NAME: solosahej/bluegreenjava
+
   TAG: ${{ inputs.DOCKER_TAG }}
 
   KUBE_NAMESPACE: webapps
 
   DEPLOY_ENV: ${{ inputs.DEPLOY_ENV }}
+
   DEPLOYMENT: app-${{ inputs.DEPLOY_ENV }}
 
   K8S_API_SERVER: ${{ secrets.K8S_API_SERVER }}
+
   K8S_TOKEN: ${{ secrets.K8S_TOKEN }}
 
 
@@ -83,8 +87,7 @@ jobs:
 
       # ==================================================
       # 4. Compile
-      # Jenkins:
-      # mvn compile
+      # Same as Jenkins
       # ==================================================
 
       - name: Compile
@@ -94,12 +97,8 @@ jobs:
 
       # ==================================================
       # 5. Tests
-      # Same behavior as Jenkins project:
+      # Same behavior as Jenkins:
       # mvn test -DskipTests=true
-      #
-      # Tests stage is kept, but actual test execution
-      # is skipped so pipeline does not fail on existing
-      # test problems.
       # ==================================================
 
       - name: Tests
@@ -110,9 +109,9 @@ jobs:
       # ==================================================
       # 6. Trivy Filesystem Scan
       #
-      # exit-code: 0
-      # Vulnerabilities are displayed but pipeline
-      # continues.
+      # exit-code 0:
+      # vulnerabilities are reported
+      # but pipeline continues
       # ==================================================
 
       - name: Trivy FS Scan
@@ -127,7 +126,7 @@ jobs:
 
       # ==================================================
       # 7. Build Java Application
-      # No Nexus
+      # Nexus removed
       # ==================================================
 
       - name: Build
@@ -160,7 +159,8 @@ jobs:
       # ==================================================
       # 10. Trivy Image Scan
       #
-      # exit-code: 0
+      # exit-code 0:
+      # scan findings do not stop CICD
       # ==================================================
 
       - name: Trivy Image Scan
@@ -193,9 +193,8 @@ jobs:
 
       # ==================================================
       # 13. Configure Kubernetes
-      #
-      # Same Jenkins concept:
-      # Server URL + K8S Token
+      # Jenkins equivalent:
+      # K8 token + API server
       # ==================================================
 
       - name: Configure Kubernetes
@@ -219,12 +218,7 @@ jobs:
       # ==================================================
       # 14. Test Kubernetes Connection
       #
-      # DO NOT use:
-      # kubectl cluster-info
-      # kubectl get nodes
-      #
-      # because the jenkins ServiceAccount is scoped
-      # to the webapps namespace.
+      # Namespace-scoped only
       # ==================================================
 
       - name: Test Kubernetes Connection
@@ -250,7 +244,7 @@ jobs:
           kubectl auth can-i get pods/log \
             -n "${KUBE_NAMESPACE}"
 
-          echo "Kubernetes access test..."
+          echo "Checking Kubernetes resources..."
 
           kubectl get pods \
             -n "${KUBE_NAMESPACE}"
@@ -361,6 +355,8 @@ jobs:
 
       # ==================================================
       # 21. Verify Pods Are Ready
+      # This prevents traffic switching to an unhealthy
+      # Blue/Green deployment.
       # ==================================================
 
       - name: Verify Pods Are Ready
@@ -376,6 +372,7 @@ jobs:
 
       # ==================================================
       # 22. Switch Traffic
+      # Same Jenkins Blue-Green logic
       # ==================================================
 
       - name: Switch Traffic
@@ -404,11 +401,13 @@ jobs:
             -l version="${DEPLOY_ENV}" \
             -n "${KUBE_NAMESPACE}"
 
+
           echo "Checking Service..."
 
           kubectl get svc \
             bankapp-service \
             -n "${KUBE_NAMESPACE}"
+
 
           echo "Checking Deployment..."
 
@@ -416,7 +415,8 @@ jobs:
             "${DEPLOYMENT}" \
             -n "${KUBE_NAMESPACE}"
 
-          echo "Checking Service Endpoints..."
+
+          echo "Checking Endpoints..."
 
           kubectl get endpoints \
             bankapp-service \
@@ -434,6 +434,7 @@ jobs:
           echo "Deployment Successful"
           echo "Environment : ${DEPLOY_ENV}"
           echo "Docker Tag  : ${TAG}"
+          echo "Image       : ${IMAGE_NAME}:${TAG}"
           echo "Deployment  : ${DEPLOYMENT}"
           echo "Namespace   : ${KUBE_NAMESPACE}"
           echo "======================================"
