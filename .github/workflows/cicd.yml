@@ -28,15 +28,16 @@ on:
 
 
 env:
+  # Docker Hub repository MUST be lowercase
   IMAGE_NAME: solosahej/bluegreenjava
+
   TAG: ${{ inputs.DOCKER_TAG }}
 
   KUBE_NAMESPACE: webapps
 
   DEPLOY_ENV: ${{ inputs.DEPLOY_ENV }}
 
-  DEPLOYMENT: app-${{ inputs.DEPLOY_ENV }}
-
+  # Kubernetes authentication
   K8S_API_SERVER: ${{ secrets.K8S_API_SERVER }}
   K8S_TOKEN: ${{ secrets.K8S_TOKEN }}
 
@@ -51,24 +52,20 @@ jobs:
 
       # ==================================================
       # 1. Git Checkout
-      # Jenkins:
-      # git branch: 'main'
       # ==================================================
 
       - name: Git Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
 
 
       # ==================================================
       # 2. Setup Java 17
-      # Jenkins:
-      # tools { jdk 'java 17' }
       # ==================================================
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -76,15 +73,13 @@ jobs:
 
 
       # ==================================================
-      # 3. Install Maven
-      # Jenkins:
-      # tools { maven 'Maven 3.6' }
+      # 3. Check Maven
+      # GitHub hosted runner already has Maven
       # ==================================================
 
-      - name: Setup Maven
+      - name: Check Maven
         run: |
-          sudo apt-get update
-          sudo apt-get install -y maven
+          java -version
           mvn -version
 
 
@@ -96,7 +91,7 @@ jobs:
 
       - name: Compile
         run: |
-          mvn compile
+          mvn -B compile
 
 
       # ==================================================
@@ -104,50 +99,45 @@ jobs:
       # EXACT Jenkins:
       # mvn test -DskipTests=true
       #
-      # This keeps the Tests stage but skips actual tests,
-      # matching your working Jenkins pipeline.
+      # This intentionally skips test execution because
+      # that is what your working Jenkins pipeline does.
       # ==================================================
 
       - name: Tests
         run: |
-          mvn test -DskipTests=true
+          mvn -B test -DskipTests=true
 
 
       # ==================================================
-      # 6. Trivy FS Scan
+      # 6. Trivy Filesystem Scan
       #
-      # Jenkins:
-      # trivy fs --format table -o fs.html .
-      #
-      # exit-code 0:
-      # vulnerabilities won't stop CICD
+      # IMPORTANT:
+      # exit-code: 0 means vulnerabilities do not stop
+      # the pipeline.
       # ==================================================
 
       - name: Trivy FS Scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
-          exit-code: 0
+          exit-code: "0"
           format: table
 
 
       # ==================================================
-      # 7. Build
-      # EXACT Jenkins:
-      # mvn package -DskipTests=true
+      # 7. Build Java Application
+      # Nexus removed
       # ==================================================
 
       - name: Build
         run: |
-          mvn package -DskipTests=true
+          mvn -B package -DskipTests=true
 
 
       # ==================================================
       # 8. Docker Hub Login
-      # Jenkins:
-      # withDockerRegistry(credentialsId: 'docker-cred')
       # ==================================================
 
       - name: Login to Docker Hub
@@ -163,28 +153,51 @@ jobs:
 
       - name: Docker Build
         run: |
+          echo "Building image:"
+          echo "${IMAGE_NAME}:${TAG}"
+
           docker build \
             -t "${IMAGE_NAME}:${TAG}" \
             .
 
 
       # ==================================================
-      # 10. Trivy Image Scan
-      # exit-code 0 = don't stop pipeline
+      # 10. Verify Docker Image
+      # ==================================================
+
+      - name: Verify Docker Image
+        run: |
+          docker image inspect "${IMAGE_NAME}:${TAG}" > /dev/null
+
+          echo "Docker image created successfully:"
+          echo "${IMAGE_NAME}:${TAG}"
+
+
+      # ==================================================
+      # 11. Trivy Image Scan
+      #
+      # IMPORTANT FIX:
+      #
+      # WRONG:
+      # image-ref: ${IMAGE_NAME}:${TAG}
+      #
+      # CORRECT:
+      # image-ref: ${{ env.IMAGE_NAME }}:${{ env.TAG }}
+      #
+      # This is the exact issue shown in your screenshot.
       # ==================================================
 
       - name: Trivy Image Scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: "${IMAGE_NAME}:${TAG}"
+          image-ref: "${{ env.IMAGE_NAME }}:${{ env.TAG }}"
           severity: HIGH,CRITICAL
-          exit-code: 0
+          exit-code: "0"
           format: table
 
 
       # ==================================================
-      # 11. Docker Push
-      # EXACT Jenkins behavior
+      # 12. Docker Push
       # ==================================================
 
       - name: Docker Push Image
@@ -193,25 +206,23 @@ jobs:
 
 
       # ==================================================
-      # 12. Setup kubectl
+      # 13. Verify Kubernetes Credentials
       # ==================================================
 
       - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: latest
 
 
       # ==================================================
-      # 13. Configure Kubernetes
+      # 14. Configure Kubernetes
       #
-      # Jenkins:
-      # credentialsId: k8-token
-      # serverUrl: <EKS API SERVER>
+      # Same Jenkins concept:
       #
-      # GitHub:
-      # K8S_TOKEN
-      # K8S_API_SERVER
+      # serverUrl     -> K8S_API_SERVER
+      # credentialsId -> K8S_TOKEN
+      # namespace     -> webapps
       # ==================================================
 
       - name: Configure Kubernetes
@@ -233,47 +244,54 @@ jobs:
 
 
       # ==================================================
-      # 14. Test Kubernetes Connection
-      #
-      # IMPORTANT:
-      # No kubectl cluster-info
-      # No kubectl get nodes
-      #
-      # because Jenkins ServiceAccount is namespace scoped.
+      # 15. Kubernetes Permission Test
       # ==================================================
 
       - name: Test Kubernetes Connection
         run: |
 
-          echo "Checking Kubernetes permissions..."
+          echo "Checking Pods permission..."
+          test "$(kubectl auth can-i get pods -n "${KUBE_NAMESPACE}")" = "yes"
 
-          kubectl auth can-i get pods \
-            -n "${KUBE_NAMESPACE}"
+          echo "Checking Services permission..."
+          test "$(kubectl auth can-i get services -n "${KUBE_NAMESPACE}")" = "yes"
 
-          kubectl auth can-i get services \
-            -n "${KUBE_NAMESPACE}"
+          echo "Checking Deployments permission..."
+          test "$(kubectl auth can-i get deployments -n "${KUBE_NAMESPACE}")" = "yes"
 
-          kubectl auth can-i get deployments \
-            -n "${KUBE_NAMESPACE}"
+          echo "Checking Deployment create permission..."
+          test "$(kubectl auth can-i create deployments -n "${KUBE_NAMESPACE}")" = "yes"
 
-          kubectl auth can-i patch services \
-            -n "${KUBE_NAMESPACE}"
+          echo "Checking Service patch permission..."
+          test "$(kubectl auth can-i patch services -n "${KUBE_NAMESPACE}")" = "yes"
 
-          echo "Checking existing resources..."
+          echo "Checking Pod logs permission..."
+          test "$(kubectl auth can-i get pods/log -n "${KUBE_NAMESPACE}")" = "yes"
 
-          kubectl get pods \
-            -n "${KUBE_NAMESPACE}"
-
-          kubectl get services \
-            -n "${KUBE_NAMESPACE}"
-
-          kubectl get deployments \
-            -n "${KUBE_NAMESPACE}"
+          echo "All required Kubernetes permissions are available."
 
 
       # ==================================================
-      # 15. Deploy MySQL
-      # EXACT Jenkins FILE:
+      # 16. Current Kubernetes Resources
+      # ==================================================
+
+      - name: Show Kubernetes Resources
+        run: |
+
+          echo "Current Pods:"
+          kubectl get pods -n "${KUBE_NAMESPACE}"
+
+          echo "Current Services:"
+          kubectl get services -n "${KUBE_NAMESPACE}"
+
+          echo "Current Deployments:"
+          kubectl get deployments -n "${KUBE_NAMESPACE}"
+
+
+      # ==================================================
+      # 17. Deploy MySQL
+      #
+      # EXACT FILE:
       # mysql-ds.yml
       # ==================================================
 
@@ -286,11 +304,48 @@ jobs:
 
 
       # ==================================================
-      # 16. Deploy Application Service
-      # EXACT Jenkins FILE:
+      # 18. Wait for MySQL Service Endpoint
+      #
+      # This prevents application deployment from starting
+      # before MySQL has a usable backend.
+      # ==================================================
+
+      - name: Verify MySQL Ready
+        run: |
+
+          echo "Waiting for MySQL endpoint..."
+
+          for i in {1..30}; do
+
+            MYSQL_ENDPOINTS=$(kubectl get endpoints mysql \
+              -n "${KUBE_NAMESPACE}" \
+              -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
+
+            if [ -n "${MYSQL_ENDPOINTS}" ]; then
+              echo "MySQL endpoint is ready: ${MYSQL_ENDPOINTS}"
+              exit 0
+            fi
+
+            echo "MySQL is not ready yet... attempt ${i}/30"
+            sleep 5
+
+          done
+
+          echo "ERROR: MySQL did not become ready."
+          kubectl get pods -n "${KUBE_NAMESPACE}"
+          kubectl get svc mysql -n "${KUBE_NAMESPACE}"
+          kubectl get endpoints mysql -n "${KUBE_NAMESPACE}"
+
+          exit 1
+
+
+      # ==================================================
+      # 19. Deploy Application Service
+      #
+      # EXACT FILE:
       # bankapp-service.yml
       #
-      # EXACT Jenkins RESOURCE:
+      # EXACT RESOURCE:
       # bankapp-service
       # ==================================================
 
@@ -301,21 +356,22 @@ jobs:
             -n "${KUBE_NAMESPACE}" > /dev/null 2>&1
           then
 
+            echo "bankapp-service does not exist."
+            echo "Creating bankapp-service..."
+
             kubectl apply \
               -f bankapp-service.yml \
               -n "${KUBE_NAMESPACE}"
 
           else
 
-            echo "bankapp-service already exists"
+            echo "bankapp-service already exists."
 
           fi
 
 
       # ==================================================
-      # 17. Select Blue / Green Deployment File
-      #
-      # EXACT Jenkins FILE NAMES
+      # 20. Select Blue / Green Deployment File
       # ==================================================
 
       - name: Select Deployment File
@@ -324,29 +380,27 @@ jobs:
           if [ "${DEPLOY_ENV}" = "blue" ]; then
 
             echo "DEPLOYMENT_FILE=app-deployment-blue.yml" \
-              >> "$GITHUB_ENV"
+              >> "${GITHUB_ENV}"
 
           else
 
             echo "DEPLOYMENT_FILE=app-deployment-green.yml" \
-              >> "$GITHUB_ENV"
+              >> "${GITHUB_ENV}"
 
           fi
 
 
       # ==================================================
-      # 18. Deploy to Kubernetes
+      # 21. Deploy Blue / Green
       #
-      # EXACT Jenkins:
-      # kubectl apply -f ${deploymentFile}
-      #
-      # NO rollout status here
+      # EXACT FILE NAMES FROM JENKINS
       # ==================================================
 
       - name: Deploy to Kubernetes
         run: |
 
           echo "Deploying ${DEPLOY_ENV} environment"
+          echo "Using ${DEPLOYMENT_FILE}"
 
           kubectl apply \
             -f "${DEPLOYMENT_FILE}" \
@@ -354,28 +408,126 @@ jobs:
 
 
       # ==================================================
-      # 19. Check Deployment Pods
+      # 22. Find Actual Deployment
       #
-      # EXACT Jenkins verification concept
+      # We DO NOT assume deployment name is app-blue/app-green.
+      # The actual deployment is discovered from the pod owner.
+      # ==================================================
+
+      - name: Detect Deployment
+        run: |
+
+          echo "Finding ${DEPLOY_ENV} deployment..."
+
+          POD_NAME=$(kubectl get pods \
+            -n "${KUBE_NAMESPACE}" \
+            -l version="${DEPLOY_ENV}" \
+            -o jsonpath='{.items[0].metadata.name}')
+
+          if [ -z "${POD_NAME}" ]; then
+
+            echo "ERROR: No pod found with version=${DEPLOY_ENV}"
+
+            kubectl get pods \
+              -n "${KUBE_NAMESPACE}" \
+              --show-labels
+
+            exit 1
+          fi
+
+          echo "Detected Pod: ${POD_NAME}"
+
+
+          REPLICA_SET=$(kubectl get pod "${POD_NAME}" \
+            -n "${KUBE_NAMESPACE}" \
+            -o jsonpath='{.metadata.ownerReferences[0].name}')
+
+          if [ -z "${REPLICA_SET}" ]; then
+
+            echo "ERROR: Could not determine ReplicaSet."
+
+            kubectl describe pod "${POD_NAME}" \
+              -n "${KUBE_NAMESPACE}"
+
+            exit 1
+          fi
+
+          echo "Detected ReplicaSet: ${REPLICA_SET}"
+
+
+          DEPLOYMENT_NAME=$(kubectl get rs "${REPLICA_SET}" \
+            -n "${KUBE_NAMESPACE}" \
+            -o jsonpath='{.metadata.ownerReferences[0].name}')
+
+          if [ -z "${DEPLOYMENT_NAME}" ]; then
+
+            echo "ERROR: Could not determine Deployment."
+
+            kubectl describe rs "${REPLICA_SET}" \
+              -n "${KUBE_NAMESPACE}"
+
+            exit 1
+          fi
+
+          echo "Detected Deployment: ${DEPLOYMENT_NAME}"
+
+          echo "DEPLOYMENT_NAME=${DEPLOYMENT_NAME}" \
+            >> "${GITHUB_ENV}"
+
+
+      # ==================================================
+      # 23. Wait for Rollout
+      #
+      # This avoids hard-coding app-blue/app-green.
+      # ==================================================
+
+      - name: Wait for Deployment
+        run: |
+
+          echo "Waiting for deployment:"
+          echo "${DEPLOYMENT_NAME}"
+
+          kubectl rollout status \
+            deployment/"${DEPLOYMENT_NAME}" \
+            -n "${KUBE_NAMESPACE}" \
+            --timeout=180s
+
+
+      # ==================================================
+      # 24. Check Deployment Pods
       # ==================================================
 
       - name: Check Deployment Pods
         run: |
 
-          echo "Pods for ${DEPLOY_ENV}:"
-
           kubectl get pods \
             -l version="${DEPLOY_ENV}" \
-            -n "${KUBE_NAMESPACE}"
+            -n "${KUBE_NAMESPACE}" \
+            -o wide
 
 
       # ==================================================
-      # 20. Switch Traffic
+      # 25. Verify Pods Are Ready
       #
-      # EXACT Jenkins:
-      # patch bankapp-service
-      # app=bankapp
-      # version=blue/green
+      # Traffic will NOT switch unless the new environment
+      # actually has Ready pods.
+      # ==================================================
+
+      - name: Verify Pods Are Ready
+        run: |
+
+          kubectl wait \
+            --for=condition=ready \
+            pod \
+            -l version="${DEPLOY_ENV}" \
+            -n "${KUBE_NAMESPACE}" \
+            --timeout=120s
+
+
+      # ==================================================
+      # 26. Switch Traffic
+      #
+      # EXACT Jenkins logic
       # ==================================================
 
       - name: Switch Traffic
@@ -388,36 +540,86 @@ jobs:
             -n "${KUBE_NAMESPACE}" \
             -p "{\"spec\":{\"selector\":{\"app\":\"bankapp\",\"version\":\"${DEPLOY_ENV}\"}}}"
 
-          echo "Traffic switched to ${DEPLOY_ENV}"
+          echo "Traffic successfully switched to ${DEPLOY_ENV}."
 
 
       # ==================================================
-      # 21. Verify Deployment
+      # 27. Verify Deployment
       #
-      # EXACT Jenkins:
-      # get pods by version
-      # get bankapp-service
+      # EXACT Jenkins verification resources
       # ==================================================
 
       - name: Verify Deployment
         run: |
 
-          echo "Checking Pods..."
+          echo "======================================"
+          echo "Pods"
+          echo "======================================"
 
           kubectl get pods \
             -l version="${DEPLOY_ENV}" \
             -n "${KUBE_NAMESPACE}"
 
 
-          echo "Checking Service..."
+          echo "======================================"
+          echo "Service"
+          echo "======================================"
 
           kubectl get svc \
             bankapp-service \
             -n "${KUBE_NAMESPACE}"
 
 
+          echo "======================================"
+          echo "Service Endpoints"
+          echo "======================================"
+
+          kubectl get endpoints \
+            bankapp-service \
+            -n "${KUBE_NAMESPACE}"
+
+
+          echo "======================================"
+          echo "Deployment"
+          echo "======================================"
+
+          kubectl get deployment \
+            "${DEPLOYMENT_NAME}" \
+            -n "${KUBE_NAMESPACE}"
+
+
       # ==================================================
-      # 22. Final Status
+      # 28. Diagnostics on Kubernetes Failure
+      #
+      # Very useful for your ImagePullBackOff challenge.
+      # It does NOT hide the original failure.
+      # ==================================================
+
+      - name: Kubernetes Diagnostics
+        if: ${{ failure() }}
+        run: |
+
+          echo "========== PODS =========="
+          kubectl get pods \
+            -n "${KUBE_NAMESPACE}" \
+            -o wide || true
+
+          echo "========== EVENTS =========="
+          kubectl get events \
+            -n "${KUBE_NAMESPACE}" \
+            --sort-by=.lastTimestamp || true
+
+          echo "========== DEPLOYMENTS =========="
+          kubectl get deployments \
+            -n "${KUBE_NAMESPACE}" || true
+
+          echo "========== SERVICES =========="
+          kubectl get svc \
+            -n "${KUBE_NAMESPACE}" || true
+
+
+      # ==================================================
+      # 29. Final Status
       # ==================================================
 
       - name: Deployment Successful
@@ -428,5 +630,6 @@ jobs:
           echo "Environment : ${DEPLOY_ENV}"
           echo "Docker Tag  : ${TAG}"
           echo "Image       : ${IMAGE_NAME}:${TAG}"
+          echo "Deployment  : ${DEPLOYMENT_NAME}"
           echo "Namespace   : ${KUBE_NAMESPACE}"
           echo "======================================"
