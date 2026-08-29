@@ -1,0 +1,28 @@
+# values.yml
+
+alertmanager:
+  enabled: true
+  replicaCount: 1
+
+  statefulSet:
+    enabled: true  # StatefulSet is necessary for using PV with Alertmanager
+
+  persistentVolume:
+    enabled: true  # Enable persistent volume for Alertmanager
+    existingClaim: alertmanager-pvc  # Use the existing PVC we just created
+
+    accessModes:
+      - ReadWriteOnce
+
+    size: 5Gi  # Ensure the size matches the PVC
+    storageClass: manual  # Ensure the storage class matches the PV
+
+
+server:
+  replicaCount: 1
+
+  statefulSet:
+    enabled: false  # Disable StatefulSet for Prometheus (ephemeral)
+
+  persistentVolume:
+    enabled: false

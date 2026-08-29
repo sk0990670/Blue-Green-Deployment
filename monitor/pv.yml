@@ -1,0 +1,21 @@
+# pv.yml
+
+apiVersion: v1
+kind: PersistentVolume
+
+metadata:
+  name: prometheus-alertmanager-pv
+
+spec:
+  capacity:
+    storage: 5Gi  # Adjust this if the PVC requires more storage
+
+  accessModes:
+    - ReadWriteOnce  # Ensure this matches what the PVC requests
+
+  persistentVolumeReclaimPolicy: Retain
+
+  storageClassName: ""
+
+  hostPath:  # Use this only for testing; replace with your persistent storage if needed
+    path: "/mnt/data/prometheus-alertmanager"  # Adjust the path based on your setup
