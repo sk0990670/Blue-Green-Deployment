@@ -89,7 +89,7 @@ jobs:
 
       - name: Compile
         run: |
-          mvn -B compile
+          mvn -B test -DskipTests=true
 
 
       # ==================================================
