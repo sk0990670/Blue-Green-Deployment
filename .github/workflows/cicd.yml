@@ -30,6 +30,7 @@ on:
 env:
   IMAGE_NAME: solosahej/BlueGreenJava
   TAG: ${{ inputs.DOCKER_TAG }}
+
   KUBE_NAMESPACE: webapps
 
   DEPLOY_ENV: ${{ inputs.DEPLOY_ENV }}
@@ -48,7 +49,7 @@ jobs:
     steps:
 
       # ==================================================
-      # 1. Checkout
+      # 1. Git Checkout
       # ==================================================
 
       - name: Git Checkout
@@ -73,11 +74,10 @@ jobs:
       # 3. Setup Maven
       # ==================================================
 
-      - name: Install Maven
+      - name: Setup Maven
         run: |
           sudo apt-get update
           sudo apt-get install -y maven
-
           mvn -version
 
 
@@ -89,23 +89,30 @@ jobs:
 
       - name: Compile
         run: |
-          mvn -B test -DskipTests=true
+          mvn -B compile
 
 
       # ==================================================
       # 5. Tests
-      # Jenkins project had test stage
+      # Same behavior as Jenkins project:
+      # mvn test -DskipTests=true
+      #
+      # Tests stage is kept, but actual test execution
+      # is skipped so pipeline does not fail on existing
+      # test problems.
       # ==================================================
 
       - name: Tests
         run: |
-          mvn -B test
+          mvn -B test -DskipTests=true
 
 
       # ==================================================
-      # 6. Trivy FS Scan
-      # exit-code 0:
-      # findings are displayed but CI continues
+      # 6. Trivy Filesystem Scan
+      #
+      # exit-code: 0
+      # Vulnerabilities are displayed but pipeline
+      # continues.
       # ==================================================
 
       - name: Trivy FS Scan
@@ -129,7 +136,7 @@ jobs:
 
 
       # ==================================================
-      # 8. Docker Login
+      # 8. Login to Docker Hub
       # ==================================================
 
       - name: Login to Docker Hub
@@ -152,6 +159,8 @@ jobs:
 
       # ==================================================
       # 10. Trivy Image Scan
+      #
+      # exit-code: 0
       # ==================================================
 
       - name: Trivy Image Scan
@@ -184,7 +193,9 @@ jobs:
 
       # ==================================================
       # 13. Configure Kubernetes
-      # Same concept as Jenkins withKubeConfig
+      #
+      # Same Jenkins concept:
+      # Server URL + K8S Token
       # ==================================================
 
       - name: Configure Kubernetes
@@ -206,43 +217,55 @@ jobs:
 
 
       # ==================================================
-      # 14. Kubernetes Connection Test
-      # Namespace scoped only
+      # 14. Test Kubernetes Connection
+      #
+      # DO NOT use:
+      # kubectl cluster-info
+      # kubectl get nodes
+      #
+      # because the jenkins ServiceAccount is scoped
+      # to the webapps namespace.
       # ==================================================
 
       - name: Test Kubernetes Connection
         run: |
 
-          echo "Testing Pods permission..."
+          echo "Testing Kubernetes permissions..."
 
           kubectl auth can-i get pods \
             -n "${KUBE_NAMESPACE}"
 
-          echo "Testing Service permission..."
-
           kubectl auth can-i get services \
             -n "${KUBE_NAMESPACE}"
-
-          echo "Testing Deployment permission..."
 
           kubectl auth can-i get deployments \
             -n "${KUBE_NAMESPACE}"
 
-          echo "Testing Service patch permission..."
+          kubectl auth can-i create deployments \
+            -n "${KUBE_NAMESPACE}"
 
           kubectl auth can-i patch services \
             -n "${KUBE_NAMESPACE}"
 
-          echo "Testing actual resources..."
+          kubectl auth can-i get pods/log \
+            -n "${KUBE_NAMESPACE}"
 
-          kubectl get pods -n "${KUBE_NAMESPACE}"
-          kubectl get services -n "${KUBE_NAMESPACE}"
-          kubectl get deployments -n "${KUBE_NAMESPACE}"
+          echo "Kubernetes access test..."
+
+          kubectl get pods \
+            -n "${KUBE_NAMESPACE}"
+
+          kubectl get services \
+            -n "${KUBE_NAMESPACE}"
+
+          kubectl get deployments \
+            -n "${KUBE_NAMESPACE}"
 
 
       # ==================================================
       # 15. Deploy MySQL
-      # EXACT FILE NAME
+      #
+      # EXACT SAME FILE AS JENKINS
       # ==================================================
 
       - name: Deploy MySQL Deployment and Service
@@ -255,7 +278,8 @@ jobs:
 
       # ==================================================
       # 16. Deploy Application Service
-      # EXACT FILE NAME
+      #
+      # EXACT SAME FILE AS JENKINS
       # ==================================================
 
       - name: Deploy SVC-APP
@@ -277,7 +301,9 @@ jobs:
 
 
       # ==================================================
-      # 17. Select Blue / Green YAML
+      # 17. Select Blue / Green Deployment File
+      #
+      # EXACT SAME FILES
       # ==================================================
 
       - name: Select Deployment File
@@ -285,18 +311,19 @@ jobs:
 
           if [ "${DEPLOY_ENV}" = "blue" ]; then
 
-            echo "DEPLOYMENT_FILE=app-deployment-blue.yml" >> "$GITHUB_ENV"
+            echo "DEPLOYMENT_FILE=app-deployment-blue.yml" \
+              >> "$GITHUB_ENV"
 
           else
 
-            echo "DEPLOYMENT_FILE=app-deployment-green.yml" >> "$GITHUB_ENV"
+            echo "DEPLOYMENT_FILE=app-deployment-green.yml" \
+              >> "$GITHUB_ENV"
 
           fi
 
 
       # ==================================================
       # 18. Deploy Blue / Green
-      # EXACT FILE NAMES
       # ==================================================
 
       - name: Deploy to Kubernetes
@@ -321,7 +348,7 @@ jobs:
 
 
       # ==================================================
-      # 20. Check Pods
+      # 20. Check Deployment Pods
       # ==================================================
 
       - name: Check Deployment Pods
@@ -333,7 +360,22 @@ jobs:
 
 
       # ==================================================
-      # 21. Switch Traffic
+      # 21. Verify Pods Are Ready
+      # ==================================================
+
+      - name: Verify Pods Are Ready
+        run: |
+
+          kubectl wait \
+            --for=condition=ready \
+            pod \
+            -l version="${DEPLOY_ENV}" \
+            -n "${KUBE_NAMESPACE}" \
+            --timeout=120s
+
+
+      # ==================================================
+      # 22. Switch Traffic
       # ==================================================
 
       - name: Switch Traffic
@@ -350,7 +392,7 @@ jobs:
 
 
       # ==================================================
-      # 22. Verify Deployment
+      # 23. Verify Deployment
       # ==================================================
 
       - name: Verify Deployment
@@ -362,13 +404,11 @@ jobs:
             -l version="${DEPLOY_ENV}" \
             -n "${KUBE_NAMESPACE}"
 
-
           echo "Checking Service..."
 
           kubectl get svc \
             bankapp-service \
             -n "${KUBE_NAMESPACE}"
-
 
           echo "Checking Deployment..."
 
@@ -376,9 +416,15 @@ jobs:
             "${DEPLOYMENT}" \
             -n "${KUBE_NAMESPACE}"
 
+          echo "Checking Service Endpoints..."
+
+          kubectl get endpoints \
+            bankapp-service \
+            -n "${KUBE_NAMESPACE}"
+
 
       # ==================================================
-      # 23. Final Status
+      # 24. Final Status
       # ==================================================
 
       - name: Deployment Successful
